@@ -28,6 +28,8 @@ func UnaryServerMetdataTagInterceptor(fields ...string) grpc.UnaryServerIntercep
 			fmt.Printf("ctxMd: %+v\n", ctxMd)
 			fmt.Printf("tags: %+v\n", tags)
 
+			fmt.Printf("has grpc.request.user: %+v, get: %s\n", tags.Has("grpc.request.user"), tags.Values()["grpc.request.user"])
+
 			//for _, field := range fields {
 			//	if values, present := ctxMd[field]; present {
 			//		tags.Set(field, strings.Join(values, ","))
@@ -65,14 +67,14 @@ func main() {
 
 	s := grpc.NewServer(
 		grpc.UnaryInterceptor(grpc_middleware.ChainUnaryServer(
-				UnaryServerMetdataTagInterceptor(),
 				grpc_ctxtags.UnaryServerInterceptor(grpc_ctxtags.WithFieldExtractor(func(fullmethod string, req interface{}) map[string]interface{} { // ex. type of req: apipb.AddUser
 					fmt.Printf("extractor. fullmethod: %s\n, req: %+v\n", fullmethod, req)
 
 					reqMap := structToMap(req)
 					fmt.Printf("map: %+v\n", reqMap)
-					return nil
+					return reqMap
 				})),
+				UnaryServerMetdataTagInterceptor(),
 			)))
 
 	apipb.RegisterUserServiceServer(s, server)
