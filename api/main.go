@@ -2,73 +2,54 @@ package main
 
 import (
 	"context"
-	"crypto/rsa"
 	"fmt"
-	"github.com/dgrijalva/jwt-go"
-	"github.com/soichisumi/grpc-auth-sample/api-pb"
-	"github.com/soichisumi/grpc-auth-sample/auth"
-	"github.com/soichisumi/grpc-auth-sample/meta"
+	"github.com/grpc-ecosystem/go-grpc-middleware"
+	"github.com/grpc-ecosystem/go-grpc-middleware/tags"
+	"github.com/soichisumi-sandbox/grpc-middleware-sample/api-pb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/reflection"
-	"io/ioutil"
 	"log"
 	"net"
+	"reflect"
+	"strings"
 )
 
 const (
-	port = ":3000"
-	rsaPrivateKeyPath = "./privKey.pem"
-	rsaPublicKeyPath = "./privKey.pem.pub.pkcs8"
+	port             = ":3000"
 	AuthorizationKey = "authorization"
 )
 
-var (
-	PrivKey *rsa.PrivateKey       // to generate token
-	PubKey  *rsa.PublicKey        // to validate token
-)
+// UnaryServerMetdataTagInterceptor ...
+func UnaryServerMetdataTagInterceptor(fields ...string) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+		if ctxMd, ok := metadata.FromIncomingContext(ctx); ok {
+			tags := grpc_ctxtags.Extract(ctx)
+			fmt.Printf("ctxMd: %+v\n", ctxMd)
+			fmt.Printf("tags: %+v\n", tags)
 
-func fromMeta(ctx context.Context, key string) (string, error) {
-	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok {
-		return "", fmt.Errorf("not found metadata")
+			//for _, field := range fields {
+			//	if values, present := ctxMd[field]; present {
+			//		tags.Set(field, strings.Join(values, ","))
+			//	}
+			//}
+		}
+		return handler(ctx, req)
 	}
-	vs := md[key]
-	if len(vs) == 0 {
-		return "", fmt.Errorf("not found %s in metadata", key)
-	}
-	return vs[0], nil
 }
 
-
-func validateToken(token string) (*jwt.Token, error) {
-	jwtToken, err := jwt.Parse(token, func(t *jwt.Token) (interface{}, error) {
-		if _, ok := t.Method.(*jwt.SigningMethodRSA); !ok {
-			log.Printf("Unexpected signing method: %v", t.Header["alg"])
-			return nil, fmt.Errorf("invalid token")
-		}
-		return PubKey, nil
-	})
-	if err == nil && jwtToken.Valid {
-		return jwtToken, nil
+// NOTE: using reflect package may affect to performance
+// NOTE: converted map is shallow. nested struct cannot be retrieved from resMap.
+func structToMap(target interface{}) map[string]interface{} {
+	resMap := make(map[string]interface{})
+	elem := reflect.ValueOf(target).Elem()
+	for i := 0; i < elem.NumField(); i++ {
+		//field := elem.Type().Field(i).Tag.Get("json")
+		field := strings.ToLower(elem.Type().Field(i).Name)
+		value := elem.Field(i).Interface()
+		resMap[field] = value
 	}
-	return nil, err
-}
-
-func authenticationFunc() auth.AuthenticationFunc {
-	return func(ctx context.Context) (context.Context, error) {
-		authorization, err := fromMeta(ctx, AuthorizationKey)
-		if err != nil {
-			return nil, err
-		}
-
-		_, err = validateToken(authorization)
-		if err != nil {
-			return nil, err
-		}
-
-		return ctx, nil
-	}
+	return resMap
 }
 
 func main() {
@@ -77,33 +58,22 @@ func main() {
 		log.Fatalf("failed to listen: %+v\n", err)
 	}
 
-	privKey, err := ioutil.ReadFile(rsaPrivateKeyPath)
+	server, err := NewServer()
 	if err != nil {
-		log.Fatalf("Error reading the jwt private key: %s", err)
-	}
-	parsedPrivKey, err := jwt.ParseRSAPrivateKeyFromPEM(privKey)
-	if err != nil {
-		log.Fatalf("Error parsing the jwt private key: %s", err)
-	}
-	PrivKey = parsedPrivKey
-
-	pubKey, err := ioutil.ReadFile(rsaPublicKeyPath)
-	if err != nil {
-		log.Fatalf("Error reading the jwt public key: %s", err)
-	}
-	parsedPubKey, err := jwt.ParseRSAPublicKeyFromPEM(pubKey)
-	if err != nil {
-		log.Fatalf("Error parsing the jwt public key: %s", err)
-	}
-	PubKey = parsedPubKey
-
-	server, err := NewServer(parsedPrivKey)
-	if err != nil{
 		log.Fatalf("failed to create server: %+v\n", err)
 	}
+
 	s := grpc.NewServer(
-		grpc.UnaryInterceptor(auth.AuthenticationInterceptor(authenticationFunc())),
-	)
+		grpc.UnaryInterceptor(grpc_middleware.ChainUnaryServer(
+				grpc_ctxtags.UnaryServerInterceptor(grpc_ctxtags.WithFieldExtractor(func(fullmethod string, req interface{}) map[string]interface{} { // ex. type of req: apipb.AddUser
+					fmt.Printf("extractor. fullmethod: %s\n, req: %+v\n", fullmethod, req)
+
+					reqMap := structToMap(req)
+					fmt.Printf("map: %+v\n", reqMap)
+					return nil
+				})),
+				UnaryServerMetdataTagInterceptor(),
+			)))
 
 	apipb.RegisterUserServiceServer(s, server)
 	reflection.Register(s)
