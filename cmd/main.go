@@ -25,6 +25,7 @@ func UnaryServerMetdataTagInterceptor(fields ...string) grpc.UnaryServerIntercep
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 		if ctxMd, ok := metadata.FromIncomingContext(ctx); ok {
 			tags := grpc_ctxtags.Extract(ctx)
+			fmt.Printf("ctx: %+v\n", ctx)
 			fmt.Printf("ctxMd: %+v\n", ctxMd)
 			fmt.Printf("tags: %+v\n", tags)
 
